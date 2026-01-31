@@ -170,8 +170,12 @@ impl DB {
             .await?;
 
         tx.execute(
-            "INSERT INTO funds (amount, remaining_balance_rolled) VALUES (?, ?)",
-            [amount.to_string(), total_rollover.to_string()],
+            "INSERT INTO funds (amount, remaining_balance_rolled, added_at) VALUES (?, ?, ?)",
+            [
+                amount.to_string(),
+                total_rollover.to_string(),
+                Local::now().to_rfc3339(),
+            ],
         )
         .await?;
 
@@ -297,8 +301,13 @@ impl DB {
             .await?;
 
         tx.execute(
-            "INSERT INTO transactions (category_id, amount, description, overflow_from_id) VALUES (?, ?, ?, NULL)",
-            [target_cat.id.to_string(), amount.to_string(), description.unwrap_or_default()]
+            "INSERT INTO transactions (category_id, amount, description, overflow_from_id, created_at) VALUES (?, ?, ?, NULL, ?)",
+            [
+                target_cat.id.to_string(),
+                amount.to_string(),
+                description.unwrap_or_default(),
+                Local::now().to_rfc3339(),
+            ]
         ).await?;
 
         for (cat_id, deducted) in updates {
