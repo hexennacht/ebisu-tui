@@ -53,6 +53,10 @@ impl App {
         state.categories = db.get_categories().await?;
         state.balances = db.get_category_balances().await?;
 
+        // Load initial report data
+        state.transactions = db.get_transactions(state.report_date_range).await?;
+        state.summary_stats = Some(db.get_summary_stats().await?);
+
         Ok(Self {
             db,
             state,
@@ -346,13 +350,117 @@ impl App {
     }
 
     fn draw_reports(&self, frame: &mut Frame, area: Rect) {
-        let block = Block::default()
+        // Layout: Stats on top, Transactions list below
+        let layout = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(7), // Summary Stats
+                Constraint::Min(0),    // Transactions
+            ])
+            .split(area);
+
+        // --- Summary Stats ---
+        let date_range_title = format!(" < {} > ", self.state.report_date_range.title());
+        let stats_block = Block::default()
             .borders(Borders::ALL)
-            .title(" Reports (Coming Soon) ");
-        let text = Paragraph::new("Transaction history and analytics will be displayed here.")
-            .block(block)
-            .alignment(Alignment::Center);
-        frame.render_widget(text, area);
+            .title(format!(" Period Stats: {} ", date_range_title))
+            .title_alignment(Alignment::Center);
+
+        if let Some(stats) = &self.state.summary_stats {
+            let inner_layout = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+                .margin(1)
+                .split(stats_block.inner(layout[0]));
+
+            frame.render_widget(stats_block, layout[0]);
+
+            let left_stats = vec![
+                Line::from(vec![
+                    Span::styled("Total Funds Added: ", Style::default().fg(Color::Gray)),
+                    Span::styled(
+                        format!("IDR {}", format_idr(stats.total_funds_added)),
+                        Style::default().fg(Color::Green),
+                    ),
+                ]),
+                Line::from(vec![
+                    Span::styled("Total Expenses:    ", Style::default().fg(Color::Gray)),
+                    Span::styled(
+                        format!("IDR {}", format_idr(stats.total_spent)),
+                        Style::default().fg(Color::Red),
+                    ),
+                ]),
+            ];
+            frame.render_widget(Paragraph::new(left_stats), inner_layout[0]);
+
+            // Right side could show savings rate or overflow count if tracked?
+            // For now just show net flow maybe?
+            let net = stats.total_funds_added - stats.total_spent;
+            let net_color = if net >= Decimal::ZERO {
+                Color::Cyan
+            } else {
+                Color::Red
+            };
+
+            let right_stats = vec![Line::from(vec![
+                Span::styled("Net Flow:          ", Style::default().fg(Color::Gray)),
+                Span::styled(
+                    format!("IDR {}", format_idr(net)),
+                    Style::default().fg(net_color).add_modifier(Modifier::BOLD),
+                ),
+            ])];
+            frame.render_widget(Paragraph::new(right_stats), inner_layout[1]);
+        } else {
+            frame.render_widget(stats_block, layout[0]);
+            frame.render_widget(Paragraph::new("Loading..."), layout[0]);
+        }
+
+        // --- Transactions List ---
+        let list_block = Block::default()
+            .borders(Borders::ALL)
+            .title(" Transaction History ");
+
+        let items: Vec<ListItem> = self
+            .state
+            .transactions
+            .iter()
+            .map(|t| {
+                let date_str = t.created_at.format("%Y-%m-%d %H:%M").to_string();
+                let cat_name = t
+                    .category_name
+                    .map(|c| c.to_string())
+                    .unwrap_or("Unknown".to_string());
+
+                let desc = t.description.clone().unwrap_or_default();
+                let desc_display = if desc.len() > 20 {
+                    format!("{}...", &desc[0..17])
+                } else {
+                    desc
+                };
+
+                ListItem::new(Line::from(vec![
+                    Span::styled(
+                        format!("{:<18}", date_str),
+                        Style::default().fg(Color::DarkGray),
+                    ),
+                    Span::raw(" | "),
+                    Span::styled(
+                        format!("{:<12}", cat_name),
+                        Style::default().fg(Color::Cyan),
+                    ),
+                    Span::raw(" | "),
+                    Span::styled(
+                        format!("IDR {:>12}", format_idr(t.amount)),
+                        Style::default().fg(Color::White),
+                    ),
+                    Span::raw(" | "),
+                    Span::styled(desc_display, Style::default().fg(Color::Gray)),
+                ]))
+            })
+            .collect();
+
+        let list = List::new(items).block(list_block);
+        frame.render_widget(list, layout[1]);
     }
 
     fn draw_settings(&self, frame: &mut Frame, area: Rect) {
@@ -466,6 +574,24 @@ impl App {
                 ActiveTab::AddExpense => Ok(Some(Action::SubmitTransaction)),
                 _ => Ok(None),
             },
+            KeyCode::Left | KeyCode::Char('h') => {
+                if self.state.active_tab == ActiveTab::Reports {
+                    Ok(Some(Action::ChangeDateRange(
+                        self.state.report_date_range.next(),
+                    ))) // Cycling for now
+                } else {
+                    Ok(None)
+                }
+            }
+            KeyCode::Right | KeyCode::Char('l') => {
+                if self.state.active_tab == ActiveTab::Reports {
+                    Ok(Some(Action::ChangeDateRange(
+                        self.state.report_date_range.next(),
+                    )))
+                } else {
+                    Ok(None)
+                }
+            }
             _ => Ok(None),
         }
     }
@@ -512,10 +638,25 @@ impl App {
             Action::NextTab => {
                 self.state.active_tab = self.state.active_tab.next();
                 self.state.clear_inputs();
+                if self.state.active_tab == ActiveTab::Reports {
+                    // Auto-refresh reports on tab switch
+                    self.state.transactions = self
+                        .db
+                        .get_transactions(self.state.report_date_range)
+                        .await?;
+                    self.state.summary_stats = Some(self.db.get_summary_stats().await?);
+                }
             }
             Action::PrevTab => {
                 self.state.active_tab = self.state.active_tab.prev();
                 self.state.clear_inputs();
+                if self.state.active_tab == ActiveTab::Reports {
+                    self.state.transactions = self
+                        .db
+                        .get_transactions(self.state.report_date_range)
+                        .await?;
+                    self.state.summary_stats = Some(self.db.get_summary_stats().await?);
+                }
             }
             Action::EnterInsert => {
                 self.state.input_mode = InputMode::Insert;
@@ -646,6 +787,13 @@ impl App {
             }
             Action::RefreshCategories => {
                 self.state.categories = self.db.get_categories().await?;
+            }
+            Action::ChangeDateRange(range) => {
+                self.state.report_date_range = range;
+                self.state.transactions = self.db.get_transactions(range).await?;
+                // Summary stats are global for now (total lifetime), or should they be range filtered too?
+                // The implementation in database.rs was "SELECT SUM(amount) FROM funds", so it's global.
+                // We'll keep it as global stats + ranged transactions for now.
             }
             _ => {}
         }

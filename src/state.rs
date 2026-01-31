@@ -94,11 +94,19 @@ pub struct State {
     pub status_message: Option<String>,
     /// Whether to show help overlay
     pub show_help: bool,
+
+    // Reporting state
+    pub report_date_range: crate::models::DateRange,
+    pub transactions: Vec<crate::models::Transaction>,
+    pub summary_stats: Option<crate::models::SummaryStats>,
 }
 
 impl State {
     pub fn new() -> Self {
-        Self::default()
+        Self {
+            report_date_range: crate::models::DateRange::Month,
+            ..Default::default()
+        }
     }
 
     pub fn set_status(&mut self, msg: impl Into<String>) {

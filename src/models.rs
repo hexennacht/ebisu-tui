@@ -80,3 +80,56 @@ pub enum DateRange {
     Year,
     FiveYears,
 }
+
+impl Default for DateRange {
+    fn default() -> Self {
+        Self::Month
+    }
+}
+
+impl DateRange {
+    pub fn get_dates(&self) -> (DateTime<Local>, DateTime<Local>) {
+        let now = Local::now();
+        let end_of_day = now
+            .date_naive()
+            .and_hms_opt(23, 59, 59)
+            .unwrap()
+            .and_local_timezone(Local)
+            .unwrap();
+
+        let start_date = match self {
+            DateRange::Today => now
+                .date_naive()
+                .and_hms_opt(0, 0, 0)
+                .unwrap()
+                .and_local_timezone(Local)
+                .unwrap(),
+            DateRange::Last7Days => (now - chrono::Duration::days(7)),
+            DateRange::Month => (now - chrono::Duration::days(30)),
+            DateRange::Year => (now - chrono::Duration::days(365)),
+            DateRange::FiveYears => (now - chrono::Duration::days(365 * 5)),
+        };
+
+        (start_date, end_of_day)
+    }
+
+    pub fn title(&self) -> &str {
+        match self {
+            DateRange::Today => "Today",
+            DateRange::Last7Days => "Last 7 Days",
+            DateRange::Month => "Last 30 Days",
+            DateRange::Year => "Last Year",
+            DateRange::FiveYears => "Last 5 Years",
+        }
+    }
+
+    pub fn next(&self) -> Self {
+        match self {
+            DateRange::Today => DateRange::Last7Days,
+            DateRange::Last7Days => DateRange::Month,
+            DateRange::Month => DateRange::Year,
+            DateRange::Year => DateRange::FiveYears,
+            DateRange::FiveYears => DateRange::Today,
+        }
+    }
+}

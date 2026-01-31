@@ -272,7 +272,7 @@ impl DB {
 
             if current_remaining >= remaining_amount_to_cover {
                 updates.push((current_cat_id, remaining_amount_to_cover));
-                remaining_amount_to_cover = Decimal::ZERO;
+                // remaining_amount_to_cover = Decimal::ZERO; // Removed unnecessary assignment
                 break;
             } else {
                 if current_remaining > Decimal::ZERO {
@@ -312,7 +312,96 @@ impl DB {
         tx.commit().await?;
         Ok(())
     }
+
+    pub async fn get_summary_stats(&self) -> Result<crate::models::SummaryStats> {
+        // Total funds added - CAST to TEXT to ensure safe string retrieval for Decimal parsing
+        let total_funds: Option<String> = self
+            .conn
+            .query("SELECT CAST(SUM(amount) AS TEXT) FROM funds", ())
+            .await?
+            .next()
+            .await?
+            .and_then(|row| row.get(0).ok());
+
+        let total_funds = total_funds
+            .and_then(|s| Decimal::from_str(&s).ok())
+            .unwrap_or(Decimal::ZERO);
+
+        // Total spent - CAST to TEXT
+        let total_spent: Option<String> = self
+            .conn
+            .query("SELECT CAST(SUM(spent) AS TEXT) FROM category_balances", ())
+            .await?
+            .next()
+            .await?
+            .and_then(|row| row.get(0).ok());
+
+        let total_spent = total_spent
+            .and_then(|s| Decimal::from_str(&s).ok())
+            .unwrap_or(Decimal::ZERO);
+
+        let categories = self.get_categories().await?;
+        let balances = self.get_category_balances().await?;
+
+        Ok(crate::models::SummaryStats {
+            total_funds_added: total_funds,
+            total_spent,
+            current_settings: categories,
+            balances,
+        })
+    }
+
+    pub async fn get_transactions(
+        &self,
+        date_range: crate::models::DateRange,
+    ) -> Result<Vec<crate::models::Transaction>> {
+        let (start_date, end_date) = date_range.get_dates();
+
+        let mut rows = self
+            .conn
+            .query(
+                "SELECT t.id, t.category_id, t.amount, t.description, t.created_at, t.overflow_from_id, c.name as category_name 
+                 FROM transactions t 
+                 JOIN categories c ON t.category_id = c.id
+                 WHERE t.created_at >= ? AND t.created_at <= ?
+                 ORDER BY t.created_at DESC",
+                [start_date.to_rfc3339(), end_date.to_rfc3339()],
+            )
+            .await?;
+
+        let mut transactions = Vec::new();
+
+        while let Some(row) = rows.next().await? {
+            let id: i64 = row.get(0)?;
+            let category_id: i64 = row.get(1)?;
+            let amount_str: String = row.get(2)?;
+            let amount = Decimal::from_str(&amount_str).unwrap_or_default();
+            let description: Option<String> = row.get(3)?;
+            let created_at_str: String = row.get(4)?;
+            let created_at = chrono::DateTime::parse_from_rfc3339(&created_at_str)
+                .map(|dt| dt.with_timezone(&Local))
+                .unwrap_or_else(|_| Local::now());
+            let overflow_from_id: Option<i64> = row.get(5)?;
+            let category_name_str: String = row.get(6)?;
+            let category_name = CategoryName::from_str(&category_name_str).ok();
+
+            transactions.push(crate::models::Transaction {
+                id,
+                category_id,
+                amount,
+                description,
+                created_at,
+                overflow_from_id,
+                category_name,
+            });
+        }
+
+        Ok(transactions)
+    }
 }
+
+// Add strict-compatible inner structs if needed for other methods, or keep them separate?
+// For get_transactions we did manual extraction which is safer heavily.
 
 #[derive(serde::Deserialize)]
 struct CategoryRow {
