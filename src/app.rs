@@ -507,7 +507,7 @@ impl App {
             .split(inner);
 
         // Category List
-        let items: Vec<ListItem> = self
+        let mut items: Vec<ListItem> = self
             .state
             .categories
             .iter()
@@ -545,6 +545,21 @@ impl App {
             })
             .collect();
 
+        // Add Save Button
+        let save_selected = self.state.selected_category == self.state.categories.len();
+        let save_style = if save_selected {
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default()
+        };
+        let save_prefix = if save_selected { "> " } else { "  " };
+        items.push(ListItem::new(Line::from(vec![Span::styled(
+            format!("{}[ SAVE CHANGES ]", save_prefix),
+            save_style,
+        )])));
+
         let list =
             List::new(items).highlight_style(Style::default().add_modifier(Modifier::REVERSED));
         // We handle selection manual rendering above for more control
@@ -577,8 +592,8 @@ impl App {
                 Span::raw(": Edit  "),
                 Span::styled("Esc", Style::default().fg(Color::Yellow)),
                 Span::raw(": Cancel  "),
-                Span::styled("Enter", Style::default().fg(Color::Yellow)),
-                Span::raw(": Save"),
+                Span::styled("Save Button", Style::default().fg(Color::Yellow)),
+                Span::raw(": Save All"),
             ]),
         ];
         frame.render_widget(Paragraph::new(info_text), layout[1]);
@@ -653,7 +668,13 @@ impl App {
             KeyCode::Enter => match self.state.active_tab {
                 ActiveTab::AddFunds => Ok(Some(Action::SubmitFunds)),
                 ActiveTab::AddExpense => Ok(Some(Action::SubmitTransaction)),
-                ActiveTab::Settings => Ok(Some(Action::StartEditingCategory)),
+                ActiveTab::Settings => {
+                    if self.state.selected_category == self.state.categories.len() {
+                        Ok(Some(Action::SaveSettings))
+                    } else {
+                        Ok(Some(Action::StartEditingCategory))
+                    }
+                }
                 _ => Ok(None),
             },
             KeyCode::Left | KeyCode::Char('h') => {
@@ -692,7 +713,7 @@ impl App {
             KeyCode::Enter => match self.state.active_tab {
                 ActiveTab::AddFunds => Ok(Some(Action::SubmitFunds)),
                 ActiveTab::AddExpense => Ok(Some(Action::SubmitTransaction)),
-                ActiveTab::Settings => Ok(Some(Action::SaveCategoryLimit)),
+                ActiveTab::Settings => Ok(Some(Action::ConfirmCategoryEdit)),
                 _ => Ok(Some(Action::EnterNormal)),
             },
             KeyCode::Tab => {
@@ -769,23 +790,41 @@ impl App {
                     self.state.amount_input = cat.limit_percentage.to_string();
                 }
             }
-            Action::SaveCategoryLimit => {
+            Action::ConfirmCategoryEdit => {
                 if let Ok(limit) = Decimal::from_str(&self.state.amount_input) {
-                    if let Some(cat) = self.state.categories.get(self.state.selected_category) {
-                        match self.db.update_category_limit(cat.id, limit).await {
-                            Ok(_) => {
-                                self.state.set_status(format!(
-                                    "Updated {} limit to {}%",
-                                    cat.name, limit
-                                ));
-                                self.state.clear_inputs();
-                                self.state.categories = self.db.get_categories().await?;
-                            }
-                            Err(e) => self.state.set_status(format!("Error: {}", e)),
-                        }
+                    if let Some(cat) = self.state.categories.get_mut(self.state.selected_category) {
+                        cat.limit_percentage = limit;
+                        self.state.clear_inputs();
+                        // Note: We do NOT define self.state.categories from DB here logic
+                        // We keep it in memory until SaveSettings
                     }
                 } else {
                     self.state.set_status("Invalid number format");
+                }
+            }
+            Action::SaveSettings => {
+                let mut failed = false;
+                // Clone needed to iterate async? No, we can iterate indices or similar
+                // But update_category_limit is async.
+                // We'll iterate clones to avoid borrow check issues during async calls
+                let categories = self.state.categories.clone();
+
+                for cat in categories {
+                    if let Err(e) = self
+                        .db
+                        .update_category_limit(cat.id, cat.limit_percentage)
+                        .await
+                    {
+                        self.state
+                            .set_status(format!("Error saving {}: {}", cat.name, e));
+                        failed = true;
+                    }
+                }
+
+                if !failed {
+                    self.state.set_status("All settings saved successfully.");
+                    // Refresh from DB to be sure? Not needed if we trust the loop
+                    self.state.categories = self.db.get_categories().await?;
                 }
             }
             Action::CancelInput => {
@@ -811,12 +850,19 @@ impl App {
                         c.name != CategoryName::Savings
                             || self.state.active_tab == ActiveTab::Settings
                     })
-                    .count()
-                    .saturating_sub(1);
+                    .count();
+                // If in Settings, we allow one more index (the Save button), so max_idx = count
+                // If not in Settings, max_idx = count - 1 (saturating_sub(1))
+
+                let limit = if self.state.active_tab == ActiveTab::Settings {
+                    max_idx // Allow index = count
+                } else {
+                    max_idx.saturating_sub(1)
+                };
 
                 if (self.state.active_tab == ActiveTab::Settings
                     || self.state.active_input == ActiveInput::Category)
-                    && self.state.selected_category < max_idx
+                    && self.state.selected_category < limit
                 {
                     self.state.selected_category += 1;
                 }

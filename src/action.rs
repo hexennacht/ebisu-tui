@@ -46,7 +46,8 @@ pub enum Action {
 
     // Settings
     StartEditingCategory,
-    SaveCategoryLimit,
+    ConfirmCategoryEdit, // Renamed from SaveCategoryLimit to be clearer about memory update
+    SaveSettings,        // Triggers DB persist
 }
 
 /// Direction for navigation

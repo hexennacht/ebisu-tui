@@ -184,6 +184,8 @@ cargo flamegraph
 ### Internal Documentation
 - **[RUST_GUIDELINES.md](../RUST_GUIDELINES.md)** - Comprehensive Rust coding standards
 - **[rust-best-practices/](../rust-best-practices/)** - Original best practices handbook
+- **[RUST_TUI_GUIDE.md](RUST_TUI_GUIDE.md)** - A "book" on Rust TUI development using this stack
+- **[DEVELOPMENT_KNOWLEDGE.md](DEVELOPMENT_KNOWLEDGE.md)** - Architecture, DB design, and key learnings from development
 
 ### External Resources
 - [Rust Official API Guidelines](https://rust-lang.github.io/api-guidelines/about.html)
