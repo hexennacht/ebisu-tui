@@ -288,7 +288,7 @@ impl App {
             .constraints([
                 Constraint::Length(3),
                 Constraint::Length(3),
-                Constraint::Length(5),
+                Constraint::Length(6),
                 Constraint::Min(0),
             ])
             .split(inner);
