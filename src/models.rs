@@ -104,10 +104,10 @@ impl DateRange {
                 .unwrap()
                 .and_local_timezone(Local)
                 .unwrap(),
-            DateRange::Last7Days => (now - chrono::Duration::days(7)),
-            DateRange::Month => (now - chrono::Duration::days(30)),
-            DateRange::Year => (now - chrono::Duration::days(365)),
-            DateRange::FiveYears => (now - chrono::Duration::days(365 * 5)),
+            DateRange::Last7Days => now - chrono::Duration::days(7),
+            DateRange::Month => now - chrono::Duration::days(30),
+            DateRange::Year => now - chrono::Duration::days(365),
+            DateRange::FiveYears => now - chrono::Duration::days(365 * 5),
         };
 
         (start_date, end_of_day)

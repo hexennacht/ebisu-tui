@@ -101,7 +101,7 @@ impl DB {
             )
         };
 
-        let mut stmt = self.conn.prepare(sql).await?;
+        let stmt = self.conn.prepare(sql).await?;
         let mut rows = stmt.query(params).await?;
 
         let row = rows
