@@ -16,6 +16,7 @@ pub enum ActiveInput {
     Amount,
     Description,
     Category,
+    CategoryLimit,
 }
 
 /// Active tab/page

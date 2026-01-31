@@ -148,6 +148,16 @@ impl DB {
         Ok(categories)
     }
 
+    pub async fn update_category_limit(&self, category_id: i64, limit: Decimal) -> Result<()> {
+        self.conn
+            .execute(
+                "UPDATE categories SET limit_percentage = ? WHERE id = ?",
+                [limit.to_string(), category_id.to_string()],
+            )
+            .await?;
+        Ok(())
+    }
+
     // FUND ALLOCATION LOGIC
     #[allow(dead_code)]
     pub async fn add_funds(&self, amount: Decimal) -> Result<()> {

@@ -463,16 +463,6 @@ impl App {
         frame.render_widget(list, layout[1]);
     }
 
-    fn draw_settings(&self, frame: &mut Frame, area: Rect) {
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .title(" Settings (Coming Soon) ");
-        let text = Paragraph::new("Category limit configuration will be available here.")
-            .block(block)
-            .alignment(Alignment::Center);
-        frame.render_widget(text, area);
-    }
-
     fn draw_footer(&self, frame: &mut Frame, area: Rect) {
         let mode_str = match self.state.input_mode {
             InputMode::Normal => "NORMAL",
@@ -501,6 +491,97 @@ impl App {
 
         let footer = Paragraph::new(footer_text).block(Block::default().borders(Borders::ALL));
         frame.render_widget(footer, area);
+    }
+
+    fn draw_settings(&self, frame: &mut Frame, area: Rect) {
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .title(" Settings - Category Allocation ");
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
+
+        let layout = Layout::default()
+            .direction(Direction::Vertical)
+            .margin(1)
+            .constraints([Constraint::Min(0), Constraint::Length(3)])
+            .split(inner);
+
+        // Category List
+        let items: Vec<ListItem> = self
+            .state
+            .categories
+            .iter()
+            .enumerate()
+            .map(|(i, cat)| {
+                let is_selected = i == self.state.selected_category;
+                // Check if this category is being edited
+                let is_editing = self.state.input_mode == InputMode::Insert
+                    && self.state.active_input == ActiveInput::CategoryLimit
+                    && is_selected;
+
+                let limit_display = if is_editing {
+                    format!("{}%", self.state.amount_input)
+                } else {
+                    format!("{}%", cat.limit_percentage)
+                };
+
+                let style = if is_selected {
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default()
+                };
+
+                let prefix = if is_selected { "> " } else { "  " };
+                let edit_indicator = if is_editing { " [EDITING]" } else { "" };
+
+                ListItem::new(Line::from(vec![
+                    Span::styled(format!("{}{:<15}", prefix, cat.name), style),
+                    Span::raw(" | "),
+                    Span::styled(format!("{:>6}", limit_display), style),
+                    Span::styled(edit_indicator, Style::default().fg(Color::Green)),
+                ]))
+            })
+            .collect();
+
+        let list =
+            List::new(items).highlight_style(Style::default().add_modifier(Modifier::REVERSED));
+        // We handle selection manual rendering above for more control
+
+        frame.render_widget(list, layout[0]);
+
+        // Total Percentage Check
+        let total_percent: Decimal = self
+            .state
+            .categories
+            .iter()
+            .map(|c| c.limit_percentage)
+            .sum();
+        let total_color = if total_percent == Decimal::new(100, 0) {
+            Color::Green
+        } else {
+            Color::Red
+        };
+
+        let info_text = vec![
+            Line::from(vec![
+                Span::raw("Total Allocation: "),
+                Span::styled(
+                    format!("{}%", total_percent),
+                    Style::default().fg(total_color),
+                ),
+            ]),
+            Line::from(vec![
+                Span::styled("Enter/i", Style::default().fg(Color::Yellow)),
+                Span::raw(": Edit  "),
+                Span::styled("Esc", Style::default().fg(Color::Yellow)),
+                Span::raw(": Cancel  "),
+                Span::styled("Enter", Style::default().fg(Color::Yellow)),
+                Span::raw(": Save"),
+            ]),
+        ];
+        frame.render_widget(Paragraph::new(info_text), layout[1]);
     }
 
     fn draw_help_overlay(&self, frame: &mut Frame, area: Rect) {
@@ -572,6 +653,7 @@ impl App {
             KeyCode::Enter => match self.state.active_tab {
                 ActiveTab::AddFunds => Ok(Some(Action::SubmitFunds)),
                 ActiveTab::AddExpense => Ok(Some(Action::SubmitTransaction)),
+                ActiveTab::Settings => Ok(Some(Action::StartEditingCategory)),
                 _ => Ok(None),
             },
             KeyCode::Left | KeyCode::Char('h') => {
@@ -598,10 +680,19 @@ impl App {
 
     fn handle_insert_mode(&mut self, key: event::KeyEvent) -> Result<Option<Action>> {
         match key.code {
-            KeyCode::Esc => Ok(Some(Action::EnterNormal)),
+            KeyCode::Esc => {
+                if self.state.input_mode == InputMode::Insert
+                    && self.state.active_input == ActiveInput::CategoryLimit
+                {
+                    Ok(Some(Action::CancelInput))
+                } else {
+                    Ok(Some(Action::EnterNormal))
+                }
+            }
             KeyCode::Enter => match self.state.active_tab {
                 ActiveTab::AddFunds => Ok(Some(Action::SubmitFunds)),
                 ActiveTab::AddExpense => Ok(Some(Action::SubmitTransaction)),
+                ActiveTab::Settings => Ok(Some(Action::SaveCategoryLimit)),
                 _ => Ok(Some(Action::EnterNormal)),
             },
             KeyCode::Tab => {
@@ -618,6 +709,7 @@ impl App {
                     ActiveInput::None => {
                         self.state.active_input = ActiveInput::Amount;
                     }
+                    ActiveInput::CategoryLimit => {} // No tab cycling in limit edit
                 }
                 Ok(None)
             }
@@ -670,8 +762,41 @@ impl App {
             Action::ToggleHelp => {
                 self.state.show_help = !self.state.show_help;
             }
+            Action::StartEditingCategory => {
+                if let Some(cat) = self.state.categories.get(self.state.selected_category) {
+                    self.state.input_mode = InputMode::Insert;
+                    self.state.active_input = ActiveInput::CategoryLimit;
+                    self.state.amount_input = cat.limit_percentage.to_string();
+                }
+            }
+            Action::SaveCategoryLimit => {
+                if let Ok(limit) = Decimal::from_str(&self.state.amount_input) {
+                    if let Some(cat) = self.state.categories.get(self.state.selected_category) {
+                        match self.db.update_category_limit(cat.id, limit).await {
+                            Ok(_) => {
+                                self.state.set_status(format!(
+                                    "Updated {} limit to {}%",
+                                    cat.name, limit
+                                ));
+                                self.state.clear_inputs();
+                                self.state.categories = self.db.get_categories().await?;
+                            }
+                            Err(e) => self.state.set_status(format!("Error: {}", e)),
+                        }
+                    }
+                } else {
+                    self.state.set_status("Invalid number format");
+                }
+            }
+            Action::CancelInput => {
+                self.state.clear_inputs();
+            }
             Action::Up => {
-                if self.state.active_input == ActiveInput::Category
+                if self.state.active_tab == ActiveTab::Settings {
+                    if self.state.selected_category > 0 {
+                        self.state.selected_category -= 1;
+                    }
+                } else if self.state.active_input == ActiveInput::Category
                     && self.state.selected_category > 0
                 {
                     self.state.selected_category -= 1;
@@ -682,17 +807,22 @@ impl App {
                     .state
                     .categories
                     .iter()
-                    .filter(|c| c.name != CategoryName::Savings)
+                    .filter(|c| {
+                        c.name != CategoryName::Savings
+                            || self.state.active_tab == ActiveTab::Settings
+                    })
                     .count()
                     .saturating_sub(1);
-                if self.state.active_input == ActiveInput::Category
+
+                if (self.state.active_tab == ActiveTab::Settings
+                    || self.state.active_input == ActiveInput::Category)
                     && self.state.selected_category < max_idx
                 {
                     self.state.selected_category += 1;
                 }
             }
             Action::InputChar(c) => match self.state.active_input {
-                ActiveInput::Amount => {
+                ActiveInput::Amount | ActiveInput::CategoryLimit => {
                     if c.is_ascii_digit() || c == '.' {
                         self.state.amount_input.push(c);
                     }
@@ -703,7 +833,7 @@ impl App {
                 _ => {}
             },
             Action::InputBackspace => match self.state.active_input {
-                ActiveInput::Amount => {
+                ActiveInput::Amount | ActiveInput::CategoryLimit => {
                     self.state.amount_input.pop();
                 }
                 ActiveInput::Description => {
@@ -712,7 +842,7 @@ impl App {
                 _ => {}
             },
             Action::InputDelete => match self.state.active_input {
-                ActiveInput::Amount => {
+                ActiveInput::Amount | ActiveInput::CategoryLimit => {
                     self.state.amount_input.pop();
                 }
                 ActiveInput::Description => {
@@ -791,9 +921,8 @@ impl App {
             Action::ChangeDateRange(range) => {
                 self.state.report_date_range = range;
                 self.state.transactions = self.db.get_transactions(range).await?;
-                // Summary stats are global for now (total lifetime), or should they be range filtered too?
-                // The implementation in database.rs was "SELECT SUM(amount) FROM funds", so it's global.
-                // We'll keep it as global stats + ranged transactions for now.
+                // Summary stats are global for now
+                self.state.summary_stats = Some(self.db.get_summary_stats().await?);
             }
             _ => {}
         }

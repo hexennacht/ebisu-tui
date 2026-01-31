@@ -43,6 +43,10 @@ pub enum Action {
 
     // Category selection
     SelectCategory(usize),
+
+    // Settings
+    StartEditingCategory,
+    SaveCategoryLimit,
 }
 
 /// Direction for navigation
